@@ -1,0 +1,6 @@
+{
+  "name": "Les Mots Libres",
+  "description": "Plateforme de l'association culturelle Les Mots Libres, dédiée à l'écriture créative : ateliers, rencontres, agenda et adhésions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
