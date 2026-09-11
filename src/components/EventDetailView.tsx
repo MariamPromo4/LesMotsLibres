@@ -230,7 +230,7 @@ export const EventDetailView: React.FC<EventDetailViewProps> = ({
                 )}
 
                 <p className="text-[11px] text-[#78716C] text-center leading-relaxed">
-                  Étape 1 : Inscription préparatoire. Vos informations sont enregistrées sans transaction bancaire immédiate.
+                  Réservation immédiate. Le règlement s'effectue sur place lors de votre venue à l'atelier.
                 </p>
               </div>
 

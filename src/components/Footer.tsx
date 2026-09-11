@@ -76,6 +76,17 @@ export const Footer: React.FC<FooterProps> = ({ setActivePage }) => {
               <li>
                 <button
                   onClick={() => {
+                    setActivePage('writings');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="hover:text-[#FAF7F2] transition-colors"
+                >
+                  Les écrits de l'atelier
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => {
                     setActivePage('contact');
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                   }}
@@ -122,7 +133,7 @@ export const Footer: React.FC<FooterProps> = ({ setActivePage }) => {
           <div className="flex items-center gap-4 text-[11px] text-[#A8A196]">
             <span className="inline-flex items-center gap-1">
               <Feather className="w-3 h-3 text-[#C98A6E]" />
-              Conçu pour Next.js & Supabase
+              Association culturelle loi 1901
             </span>
             <span className="inline-flex items-center gap-1">
               <Heart className="w-3 h-3 text-[#C98A6E]" />

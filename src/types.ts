@@ -57,4 +57,49 @@ export interface Registration {
   participant_email?: string;
 }
 
-export type ActivePage = 'home' | 'about' | 'events' | 'event-detail' | 'contact' | 'connexion';
+export type ActivePage =
+  | 'home'
+  | 'about'
+  | 'events'
+  | 'event-detail'
+  | 'writings'
+  | 'writing-detail'
+  | 'contact'
+  | 'connexion'
+  | 'member-dashboard'
+  | 'admin-dashboard';
+
+export type WritingCategory = 'Nouvelle' | 'Poésie' | 'Récit' | 'Autre';
+
+export interface Writing {
+  id: string;
+  author_id: string;
+  title: string;
+  category: WritingCategory;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  author?: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+  };
+}
+
+export interface MemberRegistrationItem {
+  id: string;
+  status: RegistrationStatus;
+  registered_at: string;
+  event: EventItem;
+}
+
+export interface AdminRegistrationItem {
+  id: string;
+  event_id: string;
+  user_id: string;
+  status: RegistrationStatus;
+  registered_at: string;
+  event?: EventItem;
+  profile?: Profile;
+}

@@ -109,11 +109,11 @@ export const ContactView: React.FC = () => {
               </div>
             </div>
 
-            {/* Note on Step 1 architecture */}
+            {/* Note d'accueil */}
             <div className="p-4 rounded-lg bg-[#EAE2D7]/70 border border-[#D5CABE] text-xs text-[#57534E] space-y-1">
-              <span className="font-semibold text-[#1C1917] block">Note d'architecture (Étape 1) :</span>
+              <span className="font-semibold text-[#1C1917] block">Adhésions & Renseignements :</span>
               <p>
-                Le formulaire de contact valide rigoureusement les données saisies côté client. La connexion avec un service d'envoi réel (Resend, SendGrid ou Edge Function Supabase) est anticipée pour les étapes suivantes.
+                Vous pouvez également venir nous rencontrer directement lors des permanences du samedi après-midi à l'atelier des Cascades pour échanger autour d'un café ou feuilleter les recueils publiés.
               </p>
             </div>
           </div>

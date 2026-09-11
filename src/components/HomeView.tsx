@@ -1,19 +1,37 @@
-import React from 'react';
-import { EventItem, ActivePage } from '../types';
-import { ArrowRight, Calendar, Users, Sparkles, BookOpen, Clock, MapPin, Compass, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { EventItem, ActivePage, Writing } from '../types';
+import { fetchPublicRecentWritings } from '../lib/supabase';
+import { ArrowRight, Calendar, Users, Sparkles, BookOpen, Clock, MapPin, Compass, CheckCircle, Feather } from 'lucide-react';
 
 interface HomeViewProps {
   events: EventItem[];
   onSelectEvent: (event: EventItem) => void;
   setActivePage: (page: ActivePage) => void;
+  onSelectWriting?: (writing: Writing) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
   events,
   onSelectEvent,
-  setActivePage
+  setActivePage,
+  onSelectWriting
 }) => {
   const upcomingEvents = events.slice(0, 3);
+  const [recentWritings, setRecentWritings] = useState<Writing[]>([]);
+  const [isLoadingWritings, setIsLoadingWritings] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchPublicRecentWritings(3).then((data) => {
+      if (isMounted) {
+        setRecentWritings(data);
+        setIsLoadingWritings(false);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <div className="space-y-20 pb-20">
@@ -331,6 +349,99 @@ export const HomeView: React.FC<HomeViewProps> = ({
             );
           })}
         </div>
+      </section>
+
+      {/* 5 BIS. LES DERNIERS ÉCRITS / À LIRE (PUBLICATIONS DES MEMBRES) */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-8 gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#994D2B]">
+              <Feather className="w-3.5 h-3.5" />
+              <span>À lire • Les créations des adhérents</span>
+            </div>
+            <h2 className="font-serif text-3xl sm:text-4xl text-[#1C1917] mt-1 font-normal">
+              Les derniers écrits
+            </h2>
+          </div>
+          <button
+            onClick={() => setActivePage('writings')}
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#994D2B] hover:text-[#7F3F23] transition-colors"
+          >
+            <span>Découvrir tous les écrits</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {recentWritings.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {recentWritings.map((writing) => {
+              const formattedDate = new Date(writing.created_at).toLocaleDateString('fr-FR', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric'
+              });
+              const authorName = writing.author
+                ? `${writing.author.first_name || ''} ${writing.author.last_name || ''}`.trim() || 'Auteur anonyme'
+                : 'Membre';
+
+              return (
+                <div
+                  key={writing.id}
+                  className="bg-[#FAF7F2] rounded-lg border border-[#E7E2DA] p-6 flex flex-col justify-between hover:border-[#C5BCB0] transition-all hover:shadow-xs group space-y-4"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs text-[#78716C]">
+                      <span className="px-2 py-0.5 rounded bg-[#EAE2D7] text-[#2E4036] font-medium text-[11px]">
+                        {writing.category}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 text-[#994D2B]" />
+                        <span>{formattedDate}</span>
+                      </div>
+                    </div>
+
+                    <h3 className="font-serif text-xl font-medium text-[#1C1917] leading-snug group-hover:text-[#994D2B] transition-colors">
+                      {writing.title}
+                    </h3>
+
+                    <p className="text-xs text-[#57534E] leading-relaxed line-clamp-3 font-serif italic">
+                      « {writing.content} »
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-[#EAE2D7] flex items-center justify-between">
+                    <div className="text-xs text-[#78716C]">
+                      Par <span className="font-medium text-[#1C1917]">{authorName}</span>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        if (onSelectWriting) {
+                          onSelectWriting(writing);
+                        } else {
+                          setActivePage('writings');
+                        }
+                      }}
+                      className="text-xs font-semibold text-[#2E4036] hover:text-[#994D2B] inline-flex items-center gap-1"
+                    >
+                      <span>Lire</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          /* État vide propre sans données fictives */
+          <div className="bg-[#FAF7F2] p-8 rounded-lg border border-[#E7E2DA] text-center space-y-2">
+            <BookOpen className="w-6 h-6 text-[#994D2B] mx-auto opacity-75" />
+            <p className="font-serif text-base text-[#1C1917]">Aucune publication pour le moment</p>
+            <p className="text-xs text-[#78716C]">
+              Les textes rédigés par nos membres lors des ateliers seront bientôt partagés ici.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* 6. COMMENT PARTICIPER OU REJOINDRE L’ASSOCIATION */}

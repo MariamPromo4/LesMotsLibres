@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { EventItem, Profile } from '../types';
+import { EventItem, Profile, Writing, WritingCategory } from '../types';
 import { INITIAL_EVENTS } from '../data/mockEvents';
 
 // Supabase project credentials (provided by user)
@@ -58,6 +58,43 @@ export async function checkSupabaseTables(): Promise<{
   }
 }
 
+export function mapEventRow(row: any): EventItem {
+  return {
+    id: row.id,
+    title: row.title,
+    slug: row.slug,
+    subtitle: row.subtitle || undefined,
+    description: row.description,
+    full_description: row.full_description || row.description,
+    date: row.date,
+    formatted_date: new Date(row.date).toLocaleDateString('fr-FR', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    }),
+    start_time: (row.start_time || '14:00').slice(0, 5),
+    end_time: (row.end_time || '17:00').slice(0, 5),
+    location: row.location,
+    address: row.address || '',
+    capacity: Number(row.capacity) || 12,
+    registered_count: Number(row.registered_count) || 0,
+    image_url: row.image_url || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=1200&q=80',
+    status: row.status || 'published',
+    category: row.category || 'atelier',
+    animator: {
+      name: row.animator_name || 'Équipe d’animation',
+      role: row.animator_role || '',
+      bio: row.animator_bio || ''
+    },
+    prerequisites: row.prerequisites || undefined,
+    materials: row.materials || undefined,
+    price: row.price || undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
 /**
  * Fetch events from Supabase with graceful fallback to initial events
  */
@@ -72,40 +109,7 @@ export async function fetchEventsFromSupabase(): Promise<EventItem[]> {
       return INITIAL_EVENTS;
     }
 
-    return data.map((row: any) => ({
-      id: row.id,
-      title: row.title,
-      slug: row.slug,
-      subtitle: row.subtitle || undefined,
-      description: row.description,
-      full_description: row.full_description || row.description,
-      date: row.date,
-      formatted_date: new Date(row.date).toLocaleDateString('fr-FR', {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      }),
-      start_time: (row.start_time || '14:00').slice(0, 5),
-      end_time: (row.end_time || '17:00').slice(0, 5),
-      location: row.location,
-      address: row.address || '',
-      capacity: row.capacity,
-      registered_count: row.registered_count || 0,
-      image_url: row.image_url,
-      status: row.status,
-      category: row.category,
-      animator: {
-        name: row.animator_name,
-        role: row.animator_role || '',
-        bio: row.animator_bio || ''
-      },
-      prerequisites: row.prerequisites || undefined,
-      materials: row.materials || undefined,
-      price: row.price || undefined,
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    }));
+    return data.map(mapEventRow);
   } catch {
     return INITIAL_EVENTS;
   }
@@ -119,21 +123,808 @@ export async function registerInSupabase(
   userId?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (userId) {
-      const { error } = await supabase.from('registrations').insert({
-        event_id: eventId,
-        user_id: userId,
-        status: 'confirmed'
-      });
-      if (error && !error.message.includes('duplicate')) {
-        console.warn('Supabase registration insert notice:', error.message);
+    if (!userId) {
+      return { success: false, error: 'Utilisateur non connecté' };
+    }
+
+    // Check if already registered
+    const { data: existing } = await supabase
+      .from('registrations')
+      .select('id')
+      .eq('event_id', eventId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (existing) {
+      return { success: false, error: 'Vous êtes déjà inscrit(e) à cet atelier.' };
+    }
+
+    const { error } = await supabase.from('registrations').insert({
+      event_id: eventId,
+      user_id: userId,
+      status: 'confirmed'
+    });
+
+    if (error) {
+      if (error.message.includes('duplicate') || error.code === '23505') {
+        return { success: false, error: 'Vous êtes déjà inscrit(e) à cet atelier.' };
       }
+      return { success: false, error: error.message };
+    }
+
+    // Attempt to increment registered_count on events
+    try {
+      const { data: currentEvent } = await supabase
+        .from('events')
+        .select('registered_count')
+        .eq('id', eventId)
+        .single();
+      if (currentEvent) {
+        await supabase
+          .from('events')
+          .update({ registered_count: (currentEvent.registered_count || 0) + 1 })
+          .eq('id', eventId);
+      }
+    } catch {
+      // Non-blocking
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de l’inscription' };
+  }
+}
+
+/**
+ * Fetch member's registered event IDs
+ */
+export async function fetchMemberRegistrationIds(userId: string): Promise<string[]> {
+  try {
+    const { data, error } = await supabase
+      .from('registrations')
+      .select('event_id')
+      .eq('user_id', userId);
+
+    if (error || !data) return [];
+    return data.map((r: any) => r.event_id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch member's registrations with joined events
+ */
+export async function fetchMemberRegistrations(userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('registrations')
+      .select('id, status, registered_at, event:events(*)')
+      .eq('user_id', userId)
+      .order('registered_at', { ascending: false });
+
+    if (error || !data) {
+      return [];
+    }
+
+    return data
+      .filter((r: any) => r.event)
+      .map((r: any) => ({
+        id: r.id,
+        status: r.status,
+        registered_at: r.registered_at,
+        event: mapEventRow(r.event)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Update member's or admin's profile (first_name, last_name)
+ * Security: strictly updates only first_name, last_name and updated_at.
+ * Never touches role, id, or email.
+ */
+export async function updateMemberProfile(
+  userId: string,
+  updates: { first_name: string; last_name: string }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const trimmedFirst = updates.first_name.trim();
+    const trimmedLast = updates.last_name.trim();
+
+    if (!trimmedFirst) {
+      return { success: false, error: 'Veuillez renseigner le prénom.' };
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        first_name: trimmedFirst,
+        last_name: trimmedLast,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userId);
+
+    if (error) {
+      console.warn('Profile update error:', error.message);
+      return {
+        success: false,
+        error: "Impossible d'enregistrer les modifications. Veuillez réessayer."
+      };
     }
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err?.message };
+    console.warn('Profile update exception:', err);
+    return {
+      success: false,
+      error: "Impossible d'enregistrer les modifications. Veuillez réessayer."
+    };
   }
 }
+
+/**
+ * Admin: Update a member's profile
+ */
+export async function updateMemberProfileByAdmin(
+  memberId: string,
+  updates: { first_name: string; last_name: string }
+): Promise<{ success: boolean; error?: string }> {
+  return updateMemberProfile(memberId, updates);
+}
+
+/**
+ * Admin: Fetch dashboard summary metrics
+ */
+export async function fetchAdminMetrics() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+
+    // 1. Total members
+    const { count: membersCount } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
+
+    // 2. Events metrics
+    const { data: allEvents } = await supabase
+      .from('events')
+      .select('id, date');
+
+    const totalEvents = allEvents?.length || 0;
+    const upcomingEvents = allEvents?.filter((e: any) => e.date >= today).length || 0;
+
+    // 3. Registrations metrics
+    const { data: allRegistrations } = await supabase
+      .from('registrations')
+      .select('id, event:events(date)');
+
+    const totalRegistrations = allRegistrations?.length || 0;
+    const upcomingRegistrations =
+      allRegistrations?.filter((r: any) => r.event?.date && r.event.date >= today).length || 0;
+
+    return {
+      totalMembers: membersCount || 0,
+      totalEvents,
+      upcomingEvents,
+      totalRegistrations,
+      upcomingRegistrations
+    };
+  } catch (err) {
+    console.error('Error fetching admin metrics:', err);
+    return {
+      totalMembers: 0,
+      totalEvents: 0,
+      upcomingEvents: 0,
+      totalRegistrations: 0,
+      upcomingRegistrations: 0
+    };
+  }
+}
+
+/**
+ * Admin: Fetch all events with real registration counts
+ */
+export async function fetchAdminEvents(): Promise<EventItem[]> {
+  try {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*, registrations(count)')
+      .order('date', { ascending: false });
+
+    if (error || !data) {
+      const fallback = await fetchEventsFromSupabase();
+      return fallback;
+    }
+
+    return data.map((row: any) => {
+      const item = mapEventRow(row);
+      const realCount =
+        Array.isArray(row.registrations) && row.registrations[0]
+          ? Number(row.registrations[0].count)
+          : item.registered_count;
+      return { ...item, registered_count: realCount };
+    });
+  } catch {
+    return fetchEventsFromSupabase();
+  }
+}
+
+/**
+ * Admin: Fetch participants of a specific event
+ */
+export async function fetchEventParticipants(eventId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('registrations')
+      .select('id, status, registered_at, profile:profiles(id, first_name, last_name, email)')
+      .eq('event_id', eventId)
+      .order('registered_at', { ascending: false });
+
+    if (error || !data) return [];
+
+    return data.map((row: any) => ({
+      id: row.id,
+      status: row.status,
+      registered_at: row.registered_at,
+      first_name: row.profile?.first_name || 'Adhérent',
+      last_name: row.profile?.last_name || '',
+      email: row.profile?.email || '—'
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Admin: Fetch members list with their registrations count
+ */
+export async function fetchAdminMembers() {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, first_name, last_name, email, role, created_at, registrations(count)')
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return [];
+
+    return data.map((row: any) => ({
+      id: row.id,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      email: row.email,
+      role: row.role,
+      created_at: row.created_at,
+      registrations_count:
+        Array.isArray(row.registrations) && row.registrations[0]
+          ? Number(row.registrations[0].count)
+          : 0
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Admin: Fetch member detailed registrations
+ */
+export async function fetchMemberHistoryForAdmin(userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('registrations')
+      .select('id, status, registered_at, event:events(*)')
+      .eq('user_id', userId)
+      .order('registered_at', { ascending: false });
+
+    if (error || !data) return [];
+
+    return data
+      .filter((r: any) => r.event)
+      .map((r: any) => ({
+        id: r.id,
+        status: r.status,
+        registered_at: r.registered_at,
+        event: mapEventRow(r.event)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Admin: Fetch all registrations with event and member details
+ */
+export async function fetchAdminRegistrations() {
+  try {
+    const { data, error } = await supabase
+      .from('registrations')
+      .select('id, status, registered_at, event:events(*), profile:profiles(*)')
+      .order('registered_at', { ascending: false });
+
+    if (error || !data) return [];
+
+    return data
+      .filter((r: any) => r.event && r.profile)
+      .map((r: any) => ({
+        id: r.id,
+        event_id: r.event.id,
+        user_id: r.profile.id,
+        status: r.status,
+        registered_at: r.registered_at,
+        event: mapEventRow(r.event),
+        profile: {
+          id: r.profile.id,
+          first_name: r.profile.first_name,
+          last_name: r.profile.last_name,
+          email: r.profile.email,
+          role: r.profile.role,
+          created_at: r.profile.created_at
+        }
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Admin: Create an event
+ */
+export async function createAdminEvent(eventData: any): Promise<{ success: boolean; data?: EventItem; error?: string }> {
+  try {
+    const slug =
+      eventData.slug ||
+      eventData.title
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '') +
+        '-' +
+        Date.now().toString().slice(-4);
+
+    const payload = {
+      title: eventData.title,
+      slug,
+      subtitle: eventData.subtitle || null,
+      description: eventData.description,
+      full_description: eventData.full_description || eventData.description,
+      date: eventData.date,
+      start_time: eventData.start_time || '14:00:00',
+      end_time: eventData.end_time || '17:00:00',
+      location: eventData.location,
+      address: eventData.address || null,
+      capacity: Number(eventData.capacity) || 12,
+      registered_count: 0,
+      image_url: eventData.image_url || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=1200&q=80',
+      status: eventData.status || 'published',
+      category: eventData.category || 'atelier',
+      animator_name: eventData.animator_name || 'Équipe d’animation',
+      animator_role: eventData.animator_role || null,
+      animator_bio: eventData.animator_bio || null,
+      prerequisites: eventData.prerequisites || null,
+      materials: eventData.materials || null,
+      price: eventData.price || 'Adhérents : 15 €'
+    };
+
+    const { data, error } = await supabase
+      .from('events')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: mapEventRow(data) };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la création de l’atelier' };
+  }
+}
+
+/**
+ * Admin: Update an existing event
+ */
+export async function updateAdminEvent(
+  eventId: string,
+  eventData: any
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const payload = {
+      title: eventData.title,
+      subtitle: eventData.subtitle || null,
+      description: eventData.description,
+      full_description: eventData.full_description || eventData.description,
+      date: eventData.date,
+      start_time: eventData.start_time,
+      end_time: eventData.end_time,
+      location: eventData.location,
+      address: eventData.address || null,
+      capacity: Number(eventData.capacity) || 12,
+      status: eventData.status,
+      category: eventData.category,
+      animator_name: eventData.animator_name,
+      animator_role: eventData.animator_role || null,
+      animator_bio: eventData.animator_bio || null,
+      prerequisites: eventData.prerequisites || null,
+      materials: eventData.materials || null,
+      price: eventData.price || null,
+      image_url: eventData.image_url,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('events')
+      .update(payload)
+      .eq('id', eventId);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la mise à jour' };
+  }
+}
+
+/**
+ * Admin: Delete an event
+ */
+export async function deleteAdminEvent(eventId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('events')
+      .delete()
+      .eq('id', eventId);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la suppression' };
+  }
+}
+
+// ========================================================
+// SECTION ÉCRITS / PUBLICATIONS (WRITINGS)
+// ========================================================
+
+/**
+ * Public: Récupère les derniers écrits publiés (pour la Home)
+ */
+export async function fetchPublicRecentWritings(limit: number = 3): Promise<Writing[]> {
+  try {
+    const { data, error } = await supabase
+      .from('writings')
+      .select(`
+        id,
+        author_id,
+        title,
+        category,
+        content,
+        created_at,
+        updated_at,
+        author:profiles!author_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.warn('Writings table may not exist yet or query failed:', error.message);
+      return [];
+    }
+
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      author_id: row.author_id,
+      title: row.title,
+      category: row.category,
+      content: row.content,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      author: row.author
+    }));
+  } catch (err) {
+    console.warn('Erreur fetchPublicRecentWritings:', err);
+    return [];
+  }
+}
+
+/**
+ * Public: Récupère l'ensemble des écrits publiés (pour la page /writings)
+ */
+export async function fetchPublicWritings(): Promise<Writing[]> {
+  try {
+    const { data, error } = await supabase
+      .from('writings')
+      .select(`
+        id,
+        author_id,
+        title,
+        category,
+        content,
+        created_at,
+        updated_at,
+        author:profiles!author_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('fetchPublicWritings error:', error.message);
+      return [];
+    }
+
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      author_id: row.author_id,
+      title: row.title,
+      category: row.category,
+      content: row.content,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      author: row.author
+    }));
+  } catch (err) {
+    console.warn('Erreur fetchPublicWritings:', err);
+    return [];
+  }
+}
+
+/**
+ * Public: Récupère un écrit complet par son id (pour la lecture complète)
+ */
+export async function fetchPublicWritingById(id: string): Promise<Writing | null> {
+  try {
+    const { data, error } = await supabase
+      .from('writings')
+      .select(`
+        id,
+        author_id,
+        title,
+        category,
+        content,
+        created_at,
+        updated_at,
+        author:profiles!author_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      author_id: data.author_id,
+      title: data.title,
+      category: data.category,
+      content: data.content,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+      author: (data as any).author
+    };
+  } catch (err) {
+    console.warn('Erreur fetchPublicWritingById:', err);
+    return null;
+  }
+}
+
+/**
+ * Membre: Récupère tous les écrits du membre connecté
+ */
+export async function fetchMemberWritings(authorId: string): Promise<Writing[]> {
+  try {
+    const { data, error } = await supabase
+      .from('writings')
+      .select(`
+        id,
+        author_id,
+        title,
+        category,
+        content,
+        created_at,
+        updated_at
+      `)
+      .eq('author_id', authorId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('fetchMemberWritings error:', error.message);
+      return [];
+    }
+
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      author_id: row.author_id,
+      title: row.title,
+      category: row.category,
+      content: row.content,
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }));
+  } catch (err) {
+    console.warn('Erreur fetchMemberWritings:', err);
+    return [];
+  }
+}
+
+/**
+ * Membre: Publier un écrit associé au compte connecté
+ */
+export async function createWriting(writing: {
+  title: string;
+  category: WritingCategory;
+  content: string;
+  author_id: string;
+}): Promise<{ success: boolean; data?: Writing; error?: string }> {
+  try {
+    const payload = {
+      title: writing.title.trim(),
+      category: writing.category || 'Autre',
+      content: writing.content.trim(),
+      author_id: writing.author_id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('writings')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      data: data as Writing
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la publication' };
+  }
+}
+
+/**
+ * Membre: Modifier son propre écrit
+ */
+export async function updateWriting(
+  id: string,
+  updates: {
+    title: string;
+    category: WritingCategory;
+    content: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const payload = {
+      title: updates.title.trim(),
+      category: updates.category || 'Autre',
+      content: updates.content.trim(),
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('writings')
+      .update(payload)
+      .eq('id', id);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la modification' };
+  }
+}
+
+/**
+ * Membre ou Admin: Supprimer un écrit (RLS assure que le membre ne supprime que le sien, et l'admin peut supprimer)
+ */
+export async function deleteWriting(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('writings')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur lors de la suppression' };
+  }
+}
+
+/**
+ * Admin: Récupère l'ensemble des publications avec leurs auteurs et les métriques
+ */
+export async function fetchAdminWritings(): Promise<{
+  writings: Writing[];
+  totalCount: number;
+  authorsCount: number;
+  monthCount: number;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('writings')
+      .select(`
+        id,
+        author_id,
+        title,
+        category,
+        content,
+        created_at,
+        updated_at,
+        author:profiles!author_id (
+          id,
+          first_name,
+          last_name,
+          email
+        )
+      `)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('fetchAdminWritings error:', error.message);
+      return { writings: [], totalCount: 0, authorsCount: 0, monthCount: 0 };
+    }
+
+    const items: Writing[] = (data || []).map((row: any) => ({
+      id: row.id,
+      author_id: row.author_id,
+      title: row.title,
+      category: row.category,
+      content: row.content,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      author: row.author
+    }));
+
+    const authorIds = new Set(items.map((w) => w.author_id));
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const monthCount = items.filter((w) => {
+      const d = new Date(w.created_at);
+      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    }).length;
+
+    return {
+      writings: items,
+      totalCount: items.length,
+      authorsCount: authorIds.size,
+      monthCount
+    };
+  } catch (err) {
+    console.warn('Erreur fetchAdminWritings:', err);
+    return { writings: [], totalCount: 0, authorsCount: 0, monthCount: 0 };
+  }
+}
+
 
 /**
  * SQL Schema definition for Supabase migration
@@ -420,6 +1211,53 @@ VALUES
   'Entrée libre sur consommation de courtoisie au café'
 )
 ON CONFLICT (slug) DO NOTHING;
+
+-- 8. Table WRITINGS (Écrits des membres)
+CREATE TABLE IF NOT EXISTS public.writings (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  author_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Autre' CHECK (category IN ('Nouvelle', 'Poésie', 'Récit', 'Autre')),
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS writings_created_at_idx ON public.writings(created_at DESC);
+CREATE INDEX IF NOT EXISTS writings_author_id_idx ON public.writings(author_id);
+
+-- RLS Writings
+ALTER TABLE public.writings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Lecture publique des écrits" ON public.writings;
+CREATE POLICY "Lecture publique des écrits"
+  ON public.writings FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Un membre connecté peut publier son propre écrit" ON public.writings;
+CREATE POLICY "Un membre connecté peut publier son propre écrit"
+  ON public.writings FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = author_id);
+
+DROP POLICY IF EXISTS "Un membre peut modifier son propre écrit" ON public.writings;
+CREATE POLICY "Un membre peut modifier son propre écrit"
+  ON public.writings FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = author_id)
+  WITH CHECK (auth.uid() = author_id);
+
+DROP POLICY IF EXISTS "Suppression par l'auteur ou l'administrateur" ON public.writings;
+CREATE POLICY "Suppression par l'auteur ou l'administrateur"
+  ON public.writings FOR DELETE
+  TO authenticated
+  USING (
+    auth.uid() = author_id OR 
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid() AND profiles.role = 'admin'
+    )
+  );
 `;
 
 // Helper mock profiles for testing preview state

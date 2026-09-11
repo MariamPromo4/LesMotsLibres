@@ -102,7 +102,7 @@ export const RegistrationModal: React.FC<RegistrationModalProps> = ({
               </p>
 
               <div className="p-3 bg-[#EAE2D7]/50 rounded-md border border-[#D5CABE] text-[11px] text-[#78716C] text-left">
-                <strong>Rappel Étape 1 :</strong> L'enregistrement des inscriptions dans la table Supabase <code>registrations</code> est opérationnel avec un fallback local.
+                <strong>Information pratique :</strong> Les modalités pratiques et le rappel du matériel recommandé vous seront également rappelés avant la date de la séance.
               </div>
 
               <button

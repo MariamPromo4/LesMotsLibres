@@ -16,11 +16,17 @@ import { EventDetailView } from './components/EventDetailView';
 import { ContactView } from './components/ContactView';
 import { ConnexionView } from './components/ConnexionView';
 import { RegistrationModal } from './components/RegistrationModal';
+import { MemberDashboard } from './components/member/MemberDashboard';
+import { AdminDashboard } from './components/admin/AdminDashboard';
+import { WritingsListView } from './components/public/WritingsListView';
+import { WritingDetailView } from './components/public/WritingDetailView';
+import { Writing } from './types';
 
 export default function App() {
   const [activePage, setActivePage] = useState<ActivePage>('home');
   const [events, setEvents] = useState<EventItem[]>(INITIAL_EVENTS);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const [selectedWriting, setSelectedWriting] = useState<Writing | null>(null);
   const [registeringEvent, setRegisteringEvent] = useState<EventItem | null>(null);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [userRegistrations, setUserRegistrations] = useState<string[]>([]);
@@ -59,8 +65,7 @@ export default function App() {
           });
         }
       } else {
-        // Only clear if not in demo session
-        setCurrentUser((prev) => (prev?.id?.startsWith('usr-') ? prev : null));
+        setCurrentUser(null);
       }
     });
 
@@ -94,9 +99,31 @@ export default function App() {
         case 'contact':
           setActivePage('contact');
           break;
+        case 'ecrits':
+        case 'publications':
+        case 'textes':
+          setActivePage('writings');
+          break;
         case 'connexion':
-        case 'membre':
           setActivePage('connexion');
+          break;
+        case 'membre':
+        case 'espace-membre':
+        case 'mon-espace':
+          if (currentUser) {
+            setActivePage('member-dashboard');
+          } else {
+            setActivePage('connexion');
+          }
+          break;
+        case 'admin':
+        case 'administration':
+          // STRICT RBAC: Never grant admin rights based on URL alone. Only stored profile role.
+          if (currentUser && currentUser.role === 'admin') {
+            setActivePage('admin-dashboard');
+          } else {
+            setActivePage(currentUser ? 'member-dashboard' : 'connexion');
+          }
           break;
         case 'accueil':
         case '':
@@ -108,16 +135,55 @@ export default function App() {
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [events]);
+  }, [events, currentUser]);
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('Sign out error:', err);
+    }
+    setCurrentUser(null);
+    if (activePage === 'member-dashboard' || activePage === 'admin-dashboard') {
+      setActivePage('home');
+      window.location.hash = '';
+    }
+    setNotification({ text: 'Vous avez été déconnecté.', type: 'info' });
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   const handleNavigate = (page: ActivePage) => {
+    if (page === 'member-dashboard' && !currentUser) {
+      setActivePage('connexion');
+      window.location.hash = 'connexion';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (page === 'admin-dashboard' && currentUser?.role !== 'admin') {
+      setNotification({ text: 'Accès réservé à l’équipe d’administration.', type: 'info' });
+      setActivePage(currentUser ? 'member-dashboard' : 'connexion');
+      window.location.hash = currentUser ? 'espace-membre' : 'connexion';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setActivePage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (page === 'home') window.location.hash = '';
     else if (page === 'about') window.location.hash = 'association';
     else if (page === 'events') window.location.hash = 'evenements';
+    else if (page === 'writings') window.location.hash = 'ecrits';
     else if (page === 'contact') window.location.hash = 'contact';
     else if (page === 'connexion') window.location.hash = 'connexion';
+    else if (page === 'member-dashboard') window.location.hash = 'espace-membre';
+    else if (page === 'admin-dashboard') window.location.hash = 'administration';
+  };
+
+  const handleSelectWriting = (writing: Writing) => {
+    setSelectedWriting(writing);
+    setActivePage('writing-detail');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectEvent = (event: EventItem) => {
@@ -180,11 +246,7 @@ export default function App() {
         setActivePage={handleNavigate}
         onOpenAuth={() => handleNavigate('connexion')}
         currentUser={currentUser}
-        onLogout={() => {
-          setCurrentUser(null);
-          setNotification({ text: 'Vous avez été déconnecté.', type: 'info' });
-          setTimeout(() => setNotification(null), 3000);
-        }}
+        onLogout={handleLogout}
       />
 
       {/* Main Page Routing */}
@@ -194,6 +256,7 @@ export default function App() {
             events={events}
             onSelectEvent={handleSelectEvent}
             setActivePage={handleNavigate}
+            onSelectWriting={handleSelectWriting}
           />
         )}
 
@@ -205,6 +268,21 @@ export default function App() {
           <EventsListView
             events={events}
             onSelectEvent={handleSelectEvent}
+          />
+        )}
+
+        {activePage === 'writings' && (
+          <WritingsListView
+            onSelectWriting={handleSelectWriting}
+            onNavigate={handleNavigate}
+          />
+        )}
+
+        {activePage === 'writing-detail' && (
+          <WritingDetailView
+            writing={selectedWriting}
+            onBack={() => handleNavigate('writings')}
+            onNavigate={handleNavigate}
           />
         )}
 
@@ -226,8 +304,30 @@ export default function App() {
           <ConnexionView
             currentUser={currentUser}
             onLogin={(profile) => setCurrentUser(profile)}
-            onLogout={() => setCurrentUser(null)}
+            onLogout={handleLogout}
             setActivePage={handleNavigate}
+          />
+        )}
+
+        {activePage === 'member-dashboard' && currentUser && (
+          <MemberDashboard
+            currentUser={currentUser}
+            onSelectEvent={handleSelectEvent}
+            onNavigate={handleNavigate}
+            onLogout={handleLogout}
+            onProfileUpdated={(updatedProfile) => setCurrentUser(updatedProfile)}
+            onSelectWriting={handleSelectWriting}
+          />
+        )}
+
+        {activePage === 'admin-dashboard' && (
+          <AdminDashboard
+            currentUser={currentUser}
+            onNavigate={handleNavigate}
+            onLogout={handleLogout}
+            onSelectEventPublic={handleSelectEvent}
+            onProfileUpdated={(updatedProfile) => setCurrentUser(updatedProfile)}
+            onSelectWriting={handleSelectWriting}
           />
         )}
       </main>
